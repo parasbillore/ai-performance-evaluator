@@ -2,25 +2,95 @@
 - name: Deploy AI Performance Evaluation System
   hosts: app_server
   become: yes
-
   vars_files:
     - vars.yml
 
   tasks:
-
     - name: Update apt cache
       apt:
         update_cache: yes
         cache_valid_time: 3600
 
-    - name: Install required packages
+    - name: Install prerequisite packages
       apt:
         name:
-          - docker.io
+          - ca-certificates
+          - curl
+          - gnupg
           - git
           - python3-pip
-          - nginx
         state: present
+
+
+
+
+#    - name: Remove conflicting Docker packages
+#      apt:
+#        name:
+#          - docker.io
+#          - docker-compose-plugin
+#          - containerd
+#          - runc
+#        state: absent
+#        purge: yes
+#      ignore_errors: yes
+
+#    - name: Remove old Docker data
+#      file:
+#        path: "{{ item }}"
+#        state: absent
+#      loop:
+#        - /var/lib/docker
+#        - /var/lib/containerd
+#      ignore_errors: yes
+
+
+
+
+    - name: Create Docker keyring directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Add Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker apt repository
+      shell: |
+        echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list
+      args:
+        creates: /etc/apt/sources.list.d/docker.list
+
+    - name: Update apt cache after adding Docker repo
+      apt:
+        update_cache: yes
+
+    - name: Install Docker and Docker Compose
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+
+
+    - name: Reload systemd daemon
+      systemd:
+        daemon_reload: yes
+
+    - name: Enable and start containerd
+      systemd:
+        name: containerd
+        enabled: yes
+        state: started
 
     - name: Enable and start Docker
       systemd:
@@ -33,23 +103,6 @@
         name: ubuntu
         groups: docker
         append: yes
-
-    - name: Install Docker Compose manually
-      shell: |
-        curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
-        -o /usr/local/bin/docker-compose
-
-        chmod +x /usr/local/bin/docker-compose
-
-      args:
-        creates: /usr/local/bin/docker-compose
-
-    - name: Verify Docker Compose installation
-      shell: docker-compose --version
-      register: compose_version
-
-    - debug:
-        var: compose_version.stdout
 
     - name: Clone or update application repository
       git:
@@ -71,28 +124,43 @@
           DB_USER={{ db_user }}
           DB_PASSWORD={{ db_password }}
           OPENAI_API_KEY={{ openai_api_key }}
+          AI_MODEL={{ ai_model }}
+          AI_BASE_URL={{ ai_base_url }}
 
     - name: Build and start containers
-      shell: |
-        cd /home/ubuntu/ai-performance-evaluator
-        docker-compose up -d --build
+      shell: docker compose up -d --build
+      args:
+        chdir: /home/ubuntu/ai-performance-evaluator
 
-    - name: Wait for containers to start
+    - name: Wait for app container to be ready
       pause:
-        seconds: 20
+        seconds: 15
 
     - name: Run DB schema migration
-      shell: >
-        docker exec
-        -e PGPASSWORD="{{ db_password }}"
-        perf_eval_app
-        psql -h {{ db_host }}
-        -U {{ db_user }}
-        -d {{ db_name }}
-        -f /app/db/schema.sql
+      shell: |
+        docker compose exec -T app python <<'EOF'
+        from app.core.db import get_engine
+        from sqlalchemy import text
+
+        engine = get_engine()
+
+        with open('db/schema.sql') as f:
+            sql = f.read()
+
+        with engine.connect() as conn:
+            for stmt in sql.split(';'):
+                stmt = stmt.strip()
+                if stmt:
+                    conn.execute(text(stmt))
+            conn.commit()
+
+        print("Schema applied")
+        EOF
+      args:
+        chdir: /home/ubuntu/ai-performance-evaluator
+
 
     - name: Run seed script
-      shell: >
-        docker exec
-        perf_eval_app
-        python db/seed.py
+      shell: docker compose exec -T app python db/seed.py
+      args:
+        chdir: /home/ubuntu/ai-performance-evaluator
