@@ -1,0 +1,18 @@
+infra/ansible/vars.yml
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.backup
+.terraform.lock.hcl
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Environment files
+.env
+
+# OS files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,98 @@
+---
+- name: Deploy AI Performance Evaluation System
+  hosts: app_server
+  become: yes
+
+  vars_files:
+    - vars.yml
+
+  tasks:
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - docker.io
+          - git
+          - python3-pip
+          - nginx
+        state: present
+
+    - name: Enable and start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+
+    - name: Add ubuntu user to docker group
+      user:
+        name: ubuntu
+        groups: docker
+        append: yes
+
+    - name: Install Docker Compose manually
+      shell: |
+        curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+        -o /usr/local/bin/docker-compose
+
+        chmod +x /usr/local/bin/docker-compose
+
+      args:
+        creates: /usr/local/bin/docker-compose
+
+    - name: Verify Docker Compose installation
+      shell: docker-compose --version
+      register: compose_version
+
+    - debug:
+        var: compose_version.stdout
+
+    - name: Clone or update application repository
+      git:
+        repo: "{{ app_repo }}"
+        dest: /home/ubuntu/ai-performance-evaluator
+        version: main
+        force: yes
+      become_user: ubuntu
+
+    - name: Write .env file
+      copy:
+        dest: /home/ubuntu/ai-performance-evaluator/.env
+        owner: ubuntu
+        mode: "0600"
+        content: |
+          DB_HOST={{ db_host }}
+          DB_PORT=5432
+          DB_NAME={{ db_name }}
+          DB_USER={{ db_user }}
+          DB_PASSWORD={{ db_password }}
+          OPENAI_API_KEY={{ openai_api_key }}
+
+    - name: Build and start containers
+      shell: |
+        cd /home/ubuntu/ai-performance-evaluator
+        docker-compose up -d --build
+
+    - name: Wait for containers to start
+      pause:
+        seconds: 20
+
+    - name: Run DB schema migration
+      shell: >
+        docker exec
+        -e PGPASSWORD="{{ db_password }}"
+        perf_eval_app
+        psql -h {{ db_host }}
+        -U {{ db_user }}
+        -d {{ db_name }}
+        -f /app/db/schema.sql
+
+    - name: Run seed script
+      shell: >
+        docker exec
+        perf_eval_app
+        python db/seed.py
