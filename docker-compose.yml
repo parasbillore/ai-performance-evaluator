@@ -1,15 +1,12 @@
-version: "3.9"
-
 services:
   app:
     build: .
     container_name: perf_eval_app
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - .env
     expose:
       - "8501"
-    depends_on:
-      - nginx
 
   nginx:
     image: nginx:alpine
