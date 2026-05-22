@@ -7,8 +7,8 @@ from app.core.prompt_builder import build_prompt
 from app.core.db import fetch_one, execute, execute_returning
 
 client = OpenAI(
-    api_key=os.getenv("openai_api_key"),
-    base_url=os.getenv("ai_base_url"),
+    api_key=os.getenv("OPENAI_API_KEY"),
+    base_url=os.getenv("AI_BASE_URL"),
     timeout=120.0
 )
 
@@ -29,7 +29,7 @@ def run_evaluation(employee_id: int, year: int, triggered_by: int) -> dict:
     prompt = build_prompt(employee_id, metrics, scored)
 
     response = client.chat.completions.create(
-        model=os.getenv("ai_model"),
+        model=os.getenv("AI_MODEL"),
         messages=[{"role": "user", "content": prompt}],
         max_tokens=250,
         temperature=0.2
